@@ -17,6 +17,6 @@ if [[ -n "$unexpected_untracked" ]]; then
 fi
 
 git fetch --prune upstream
-git pull --ff-only upstream master
+git rebase upstream/master
 git push origin master
 echo "Synchronized $(git rev-parse --short HEAD) at $(date -Is)"
