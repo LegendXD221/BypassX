@@ -30,7 +30,8 @@ IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/
 # ── helpers ──────────────────────────────────────────────────────────
 
 def curl(args, cookie=None, timeout=30):
-    cmd = ["curl", "-s", "-L"]
+    max_redirs = os.getenv("MAX_REDIRECTS", "10")
+    cmd = ["curl", "-s", "-L", "--proto", "=http,https", "--proto-redir", "=http,https", "--max-redirs", max_redirs]
     if cookie:
         cmd += ["-c", cookie, "-b", cookie]
     r = subprocess.run(cmd + args, capture_output=True, text=True, timeout=timeout)

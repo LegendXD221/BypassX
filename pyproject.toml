@@ -28,6 +28,11 @@ classifiers = [
 ]
 keywords = ["shortlink", "bypass", "url-shortener", "linkvertise", "adfly", "aylink", "cpmlink", "link-bypass"]
 requires-python = ">=3.8"
+dependencies = [
+    "fastapi>=0.110",
+    "requests>=2.31",
+    "uvicorn[standard]>=0.29",
+]
 
 [project.urls]
 Homepage = "https://github.com/KaramelliS/shortlink-bypass"

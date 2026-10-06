@@ -247,3 +247,41 @@ If you find this useful, [star the repo on GitHub](https://github.com/KaramelliS
 - **PeterDaveHello** — [url-shorteners](https://github.com/PeterDaveHello/url-shorteners) domain collection
 - **FastForward Team** — Bypass algorithms and patterns
 - **bypass-all-shortlinks-debloated** — Additional domain references
+
+
+## HTTP API
+
+This repository also includes a FastAPI wrapper around the existing bypass engine. It keeps the CLI available while exposing:
+
+- `GET /health` — Render health check
+- `GET /` — API status
+- `POST /bypass` — resolve a shortlink
+
+### Run locally
+
+```bash
+pip install -r requirements.txt
+python -m uvicorn api.main:app --reload
+```
+
+Example request:
+
+```bash
+curl -X POST http://127.0.0.1:8000/bypass \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/shortlink"}'
+```
+
+The API validates HTTP(S) URLs, rejects localhost/private/reserved destinations, applies an in-memory rate limit, enforces a request timeout, and returns sanitized JSON errors. Configure `FRONTEND_URL` for the permitted frontend origin; do not use unrestricted CORS in production.
+
+### Render deployment
+
+The included `render.yaml` defines a Web Service with:
+
+```text
+Build Command: pip install -r requirements.txt
+Start Command: python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
+Health Check Path: /health
+```
+
+Supported environment variables include `FRONTEND_URL`, `RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW`, `REQUEST_TIMEOUT`, `MAX_URL_LENGTH`, and `MAX_REDIRECTS`.
