@@ -13,7 +13,7 @@ services:
       - key: RATE_LIMIT_WINDOW
         value: "60"
       - key: REQUEST_TIMEOUT
-        value: "30"
+        value: "60"
       - key: MAX_URL_LENGTH
         value: "4096"
       - key: MAX_REDIRECTS

@@ -17,7 +17,7 @@ Usage:
 GitHub: https://github.com/KaramelliS/shortlink-bypass
 """
 
-import subprocess, json, re, sys, tempfile, os, urllib.parse, time, base64, pathlib
+import subprocess, json, re, sys, tempfile, os, urllib.parse, time, base64, pathlib, logging
 
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
 SHORTENERS_FILE = SCRIPT_DIR / "shorteners.txt"
@@ -254,35 +254,102 @@ def bypass_cpmlink(url):
 # ── linkvertise (GraphQL) ─────────────────────────────────────────
 
 LINKVERTISE_GRAPHQL = "https://publisher.linkvertise.com/graphql"
-GDPC_Q = ("mutation getDetailPageContent($a:PublicLinkIdentificationInput!,$o:String,$ad:CustomAdOfferProviderAdditionalData!){getDetailPageContent(linkIdentificationInput:$a,origin:$o,additional_data:$ad){access_token}}")
-CDPC_Q = ("mutation completeDetailPageContent($a:PublicLinkIdentificationInput!,$c:CompleteDetailPageContentInput!){completeDetailPageContent(linkIdentificationInput:$a,completeDetailPageContentInput:$c){TARGET}}")
-GDPT_Q = ("mutation getDetailPageTarget($a:PublicLinkIdentificationInput!,$t:String!){getDetailPageTarget(linkIdentificationInput:$a,token:$t){url}}")
+LINKVERTISE_LOG = logging.getLogger(__name__)
+LINKVERTISE_MAX_ROUNDS = 10
+LINKVERTISE_HTTP_TIMEOUT = 20
+
+LV_GET_CONTENT_Q = """query GetContent($input: PublicLinkIdentificationInput!, $origin: String, $task_args: TaskArgument) {
+  getContent(input: $input, origin: $origin, task_args: $task_args) {
+    __typename
+    ... on ContentAccessTaskSet {
+      tasks { __typename id status ... on WaitTask { remainingWaitingTime } ... on AdTask { adIndex adsTotal } }
+    }
+    ... on DetailPageTargetData { type url paste }
+  }
+}"""
+LV_START_TASK_Q = """mutation StartTask($input: PublicLinkIdentificationInput!, $task_id: String!, $task_args: TaskArgument) {
+  startTask(input: $input, task_id: $task_id, task_args: $task_args) {
+    __typename id status ... on WaitTask { remainingWaitingTime } ... on AdTask { adIndex adsTotal }
+  }
+}"""
+LV_COMPLETE_TASK_Q = """mutation CompleteTask($input: PublicLinkIdentificationInput!, $task_id: String!, $task_args: TaskArgument) {
+  completeTask(input: $input, task_id: $task_id, task_args: $task_args) {
+    __typename id status ... on WaitTask { remainingWaitingTime } ... on AdTask { adIndex adsTotal }
+  }
+}"""
+
+
+def _lv_preview(value, limit=500):
+    """Return a bounded log-safe response preview without exposing token values."""
+    text = re.sub(r'("(?:access_token|completion_token|token|request_id)"\s*:\s*")[^"]+', r'\1[REDACTED]', str(value), flags=re.I)
+    return text[:limit]
+
+
+def _lv_post(session, operation, query, variables, url):
+    response = session.post(LINKVERTISE_GRAPHQL, json={"operationName": operation, "variables": variables, "query": query}, timeout=LINKVERTISE_HTTP_TIMEOUT)
+    LINKVERTISE_LOG.info("Linkvertise %s: status=%s content_type=%s body=%s", operation, response.status_code, response.headers.get("content-type", ""), _lv_preview(response.text))
+    response.raise_for_status()
+    data = response.json()
+    if data.get("errors"):
+        LINKVERTISE_LOG.warning("Linkvertise %s returned GraphQL errors: %s", operation, _lv_preview(data["errors"]))
+    return data
+
 
 def bypass_linkvertise(url):
-    print(f"[*] linkvertise: {url}", file=sys.stderr)
-    if not try_import_requests(): return None
+    LINKVERTISE_LOG.info("Linkvertise bypass input URL: %s", url)
+    if not try_import_requests():
+        LINKVERTISE_LOG.warning("Linkvertise bypass requires requests")
+        return None
     parsed = urllib.parse.urlparse(url)
     path = [p for p in parsed.path.strip("/").split("/") if p]
-    if len(path) < 2: return None
+    if len(path) < 2:
+        LINKVERTISE_LOG.warning("Linkvertise URL has insufficient path segments: %s", path)
+        return None
     uid, pid = path[0], path[1]
+    LINKVERTISE_LOG.info("Linkvertise parsed user_id=%s path_id=%s", uid, pid)
     session = requests.Session()
-    session.headers.update({"User-Agent": IPHONE_UA, "Origin": "https://linkvertise.com", "Referer": "https://linkvertise.com"})
-    pd = {"userIdAndUrl": {"user_id": uid, "url": pid}}
+    session.headers.update({"User-Agent": IPHONE_UA, "Origin": "https://linkvertise.com", "Referer": url})
+    variables = {"input": {"userIdAndUrl": {"user_id": uid, "url": pid}}, "origin": "sharing"}
     try:
-        r1 = session.post(LINKVERTISE_GRAPHQL, json={"operationName":"getDetailPageContent","variables":{"linkIdentificationInput":pd,"origin":"sharing","additional_data":{"taboola":{"user_id":"fallbackUserId","url":url}}},"query":GDPC_Q}, timeout=20)
-        r1.raise_for_status(); d1 = r1.json()
-        if "errors" in d1: return None
-        at = d1["data"]["getDetailPageContent"]["access_token"]
-        r2 = session.post(LINKVERTISE_GRAPHQL, json={"operationName":"completeDetailPageContent","variables":{"linkIdentificationInput":pd,"completeDetailPageContentInput":{"access_token":at}},"query":CDPC_Q}, timeout=20)
-        r2.raise_for_status(); d2 = r2.json()
-        if "errors" in d2: return None
-        pt = d2["data"]["completeDetailPageContent"]["TARGET"]
-        r3 = session.post(LINKVERTISE_GRAPHQL, json={"operationName":"getDetailPageTarget","variables":{"linkIdentificationInput":pd,"token":pt},"query":GDPT_Q}, timeout=20)
-        r3.raise_for_status(); d3 = r3.json()
-        if "errors" in d3: return None
-        return d3["data"]["getDetailPageTarget"]["url"]
-    except Exception as e:
-        print(f"[!] linkvertise: {e}", file=sys.stderr)
+        for round_number in range(1, LINKVERTISE_MAX_ROUNDS + 1):
+            LINKVERTISE_LOG.info("Linkvertise getContent round=%s", round_number)
+            content_response = _lv_post(session, "GetContent", LV_GET_CONTENT_Q, variables, url)
+            if content_response.get("errors"):
+                return None
+            content = (content_response.get("data") or {}).get("getContent") or {}
+            typename = content.get("__typename")
+            if typename == "DetailPageTargetData":
+                destination = content.get("url") or content.get("paste")
+                LINKVERTISE_LOG.info("Linkvertise access_token_received=%s (current task schema uses no access token)", False)
+                LINKVERTISE_LOG.info("Linkvertise TARGET received=%s final_destination=%s", bool(destination), destination)
+                return destination
+            if typename != "ContentAccessTaskSet":
+                LINKVERTISE_LOG.warning("Linkvertise returned unexpected content type=%s", typename)
+                return None
+
+            tasks = content.get("tasks", [])
+            waiting = [task for task in tasks if task.get("__typename") == "WaitTask" and task.get("status") == "IN_PROGRESS"]
+            if waiting and any((task.get("remainingWaitingTime") or 0) > 0 for task in waiting):
+                LINKVERTISE_LOG.warning("Linkvertise wait task is still active; remaining_seconds=%s", max(task.get("remainingWaitingTime") or 0 for task in waiting))
+                return None
+            actionable = [task for task in tasks if task.get("status") in {"OPEN", "IN_PROGRESS"} and task.get("__typename") in {"AdTask", "WaitTask"}]
+            if not actionable:
+                LINKVERTISE_LOG.warning("Linkvertise returned no actionable tasks: %s", _lv_preview(content.get("tasks", [])))
+                return None
+            for task in actionable:
+                task_id = task.get("id")
+                LINKVERTISE_LOG.info("Linkvertise task type=%s id=%s status=%s", task.get("__typename"), task_id, task.get("status"))
+                task_vars = {"input": variables["input"], "task_id": task_id}
+                started = _lv_post(session, "StartTask", LV_START_TASK_Q, task_vars, url)
+                if started.get("errors"):
+                    return None
+                completed = _lv_post(session, "CompleteTask", LV_COMPLETE_TASK_Q, task_vars, url)
+                if completed.get("errors"):
+                    return None
+        LINKVERTISE_LOG.warning("Linkvertise exceeded maximum task rounds=%s", LINKVERTISE_MAX_ROUNDS)
+        return None
+    except Exception:
+        LINKVERTISE_LOG.exception("Linkvertise bypass failed")
         return None
 
 # ── AdF.ly (ysmm XOR decode) ─────────────────────────────────────

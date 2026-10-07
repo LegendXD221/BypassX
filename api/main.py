@@ -14,12 +14,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from shortlink_bypass.bypass import bypass, get_handler
+from shortlink_bypass.bypass import get_handler
 
 from .models import BypassRequest, BypassResponse, HealthResponse, RootResponse
 
 MAX_URL_LENGTH = int(os.getenv("MAX_URL_LENGTH", "4096"))
-REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "30"))
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "60"))
 RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "10"))
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
 
@@ -117,8 +117,8 @@ def _service_name(url: str) -> str:
     return (urlparse(url).hostname or "unknown").lower()
 
 
-def _resolve(url: str) -> str | None:
-    destination = bypass(url)
+def _resolve(handler, url: str) -> str | None:
+    destination = handler(url)
     if not destination:
         return None
     return _validate_url(destination)
@@ -145,7 +145,7 @@ async def bypass_endpoint(payload: BypassRequest, request: Request) -> BypassRes
         if handler is None:
             return JSONResponse(status_code=422, content={"success": False, "error": "Unsupported service"})
         destination = await asyncio.wait_for(
-            run_in_threadpool(_resolve, url), timeout=REQUEST_TIMEOUT
+            run_in_threadpool(_resolve, handler, url), timeout=REQUEST_TIMEOUT
         )
         if not destination:
             return JSONResponse(status_code=502, content={"success": False, "error": "Unable to resolve this URL"})

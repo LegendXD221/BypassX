@@ -284,4 +284,4 @@ Start Command: python -m uvicorn api.main:app --host 0.0.0.0 --port $PORT
 Health Check Path: /health
 ```
 
-Supported environment variables include `FRONTEND_URL`, `RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW`, `REQUEST_TIMEOUT`, `MAX_URL_LENGTH`, and `MAX_REDIRECTS`.
+Supported environment variables include `FRONTEND_URL`, `RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW`, `REQUEST_TIMEOUT` (60 seconds by default), `MAX_URL_LENGTH`, and `MAX_REDIRECTS`.
