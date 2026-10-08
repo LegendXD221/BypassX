@@ -30,8 +30,11 @@ IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/
 # ── helpers ──────────────────────────────────────────────────────────
 
 def curl(args, cookie=None, timeout=30):
-    max_redirs = os.getenv("MAX_REDIRECTS", "10")
-    cmd = ["curl", "-s", "-L", "--proto", "=http,https", "--proto-redir", "=http,https", "--max-redirs", max_redirs]
+    try:
+        max_redirs = max(0, int(os.getenv("MAX_REDIRECTS", "10")))
+    except ValueError:
+        max_redirs = 10
+    cmd = ["curl", "-sS", "-L", "--proto", "=http,https", "--proto-redir", "=http,https", "--max-redirs", str(max_redirs), "--retry", "2", "--retry-delay", "1", "--retry-max-time", str(max(1, int(timeout)))]
     if cookie:
         cmd += ["-c", cookie, "-b", cookie]
     r = subprocess.run(cmd + args, capture_output=True, text=True, timeout=timeout)
@@ -255,8 +258,10 @@ def bypass_cpmlink(url):
 
 LINKVERTISE_GRAPHQL = "https://publisher.linkvertise.com/graphql"
 LINKVERTISE_LOG = logging.getLogger(__name__)
+LINKVERTISE_LOG.setLevel(logging.INFO)
 LINKVERTISE_MAX_ROUNDS = 10
 LINKVERTISE_HTTP_TIMEOUT = 20
+LINKVERTISE_RETRIES = 2
 
 LV_GET_CONTENT_Q = """query GetContent($input: PublicLinkIdentificationInput!, $origin: String, $task_args: TaskArgument) {
   getContent(input: $input, origin: $origin, task_args: $task_args) {
@@ -286,10 +291,26 @@ def _lv_preview(value, limit=500):
 
 
 def _lv_post(session, operation, query, variables, url):
-    response = session.post(LINKVERTISE_GRAPHQL, json={"operationName": operation, "variables": variables, "query": query}, timeout=LINKVERTISE_HTTP_TIMEOUT)
-    LINKVERTISE_LOG.info("Linkvertise %s: status=%s content_type=%s body=%s", operation, response.status_code, response.headers.get("content-type", ""), _lv_preview(response.text))
-    response.raise_for_status()
-    data = response.json()
+    payload = {"operationName": operation, "variables": variables, "query": query}
+    for attempt in range(LINKVERTISE_RETRIES + 1):
+        try:
+            response = session.post(LINKVERTISE_GRAPHQL, json=payload, timeout=LINKVERTISE_HTTP_TIMEOUT)
+            LINKVERTISE_LOG.info("Linkvertise %s: attempt=%s status=%s content_type=%s body=%s", operation, attempt + 1, response.status_code, response.headers.get("content-type", ""), _lv_preview(response.text))
+            if response.status_code in {408, 425, 429} or response.status_code >= 500:
+                if attempt < LINKVERTISE_RETRIES:
+                    time.sleep(0.5 * (2 ** attempt))
+                    continue
+            response.raise_for_status()
+            data = response.json()
+            break
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            LINKVERTISE_LOG.warning("Linkvertise %s transient network error on attempt=%s: %s", operation, attempt + 1, type(exc).__name__)
+            if attempt >= LINKVERTISE_RETRIES:
+                raise
+            time.sleep(0.5 * (2 ** attempt))
+        except ValueError:
+            LINKVERTISE_LOG.warning("Linkvertise %s returned invalid JSON", operation)
+            return {"errors": [{"message": "invalid_json"}]}
     if data.get("errors"):
         LINKVERTISE_LOG.warning("Linkvertise %s returned GraphQL errors: %s", operation, _lv_preview(data["errors"]))
     return data
@@ -329,8 +350,9 @@ def bypass_linkvertise(url):
 
             tasks = content.get("tasks", [])
             waiting = [task for task in tasks if task.get("__typename") == "WaitTask" and task.get("status") == "IN_PROGRESS"]
-            if waiting and any((task.get("remainingWaitingTime") or 0) > 0 for task in waiting):
-                LINKVERTISE_LOG.warning("Linkvertise wait task is still active; remaining_seconds=%s", max(task.get("remainingWaitingTime") or 0 for task in waiting))
+            if waiting:
+                remaining = [task.get("remainingWaitingTime") for task in waiting]
+                LINKVERTISE_LOG.warning("Linkvertise wait task is still active; remaining_seconds=%s", remaining)
                 return None
             actionable = [task for task in tasks if task.get("status") in {"OPEN", "IN_PROGRESS"} and task.get("__typename") in {"AdTask", "WaitTask"}]
             if not actionable:

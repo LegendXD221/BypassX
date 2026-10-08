@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import os
 import socket
 import threading
@@ -18,10 +19,29 @@ from shortlink_bypass.bypass import get_handler
 
 from .models import BypassRequest, BypassResponse, HealthResponse, RootResponse
 
-MAX_URL_LENGTH = int(os.getenv("MAX_URL_LENGTH", "4096"))
-REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "60"))
-RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "10"))
-RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
+API_LOG = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        API_LOG.warning("Invalid %s configuration; using default", name)
+        return default
+
+
+def _env_float(name: str, default: float, minimum: float = 0.1) -> float:
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        API_LOG.warning("Invalid %s configuration; using default", name)
+        return default
+
+
+MAX_URL_LENGTH = _env_int("MAX_URL_LENGTH", 4096)
+REQUEST_TIMEOUT = _env_float("REQUEST_TIMEOUT", 60)
+RATE_LIMIT_REQUESTS = _env_int("RATE_LIMIT_REQUESTS", 10)
+RATE_LIMIT_WINDOW = _env_int("RATE_LIMIT_WINDOW", 60)
 
 app = FastAPI(title="Shortlink Bypass API", version="1.0.0")
 
@@ -104,6 +124,9 @@ def _client_ip(request: Request) -> str:
 def _allow_request(client_ip: str) -> bool:
     now = time.monotonic()
     with _rate_lock:
+        stale = [key for key, bucket in _rate_buckets.items() if not bucket or now - bucket[-1] >= RATE_LIMIT_WINDOW]
+        for key in stale:
+            _rate_buckets.pop(key, None)
         bucket = _rate_buckets[client_ip]
         while bucket and now - bucket[0] >= RATE_LIMIT_WINDOW:
             bucket.popleft()
@@ -163,4 +186,5 @@ async def bypass_endpoint(payload: BypassRequest, request: Request) -> BypassRes
         return JSONResponse(status_code=400, content={"success": False, "error": "Invalid URL"})
     except Exception:
         # Never expose resolver, network, or filesystem details to API clients.
+        API_LOG.exception("Resolver failed for service=%s", _service_name(url) if "url" in locals() else "unknown")
         return JSONResponse(status_code=502, content={"success": False, "error": "Resolver failed"})
