@@ -286,4 +286,4 @@ Health Check Path: /health
 
 Supported environment variables include `FRONTEND_URL`, `RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW`, `REQUEST_TIMEOUT` (60 seconds by default), `MAX_URL_LENGTH`, and `MAX_REDIRECTS`.
 
-The resolver uses HTTP(S)-only redirects, a bounded redirect count, transient retry handling, sanitized internal diagnostics, and safe defaults when environment values are invalid. Linkvertise uses its current GraphQL task flow; if Linkvertise returns an active wait or premium task, the API returns a clean resolution failure and records the upstream state in the service logs rather than polling indefinitely.
+The resolver uses HTTP(S)-only redirects, a bounded redirect count, transient retry handling, sanitized internal diagnostics, and safe defaults when environment values are invalid. Linkvertise uses its current GraphQL task flow; it may honor a numeric non-premium wait passively for up to 30 seconds total, but it stops when a premium task, CAPTCHA, browser challenge, or opaque wait state is reported.

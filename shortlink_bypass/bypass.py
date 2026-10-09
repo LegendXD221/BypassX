@@ -262,6 +262,7 @@ LINKVERTISE_LOG.setLevel(logging.INFO)
 LINKVERTISE_MAX_ROUNDS = 10
 LINKVERTISE_HTTP_TIMEOUT = 20
 LINKVERTISE_RETRIES = 2
+LINKVERTISE_MAX_WAIT_SECONDS = 30
 
 LV_GET_CONTENT_Q = """query GetContent($input: PublicLinkIdentificationInput!, $origin: String, $task_args: TaskArgument) {
   getContent(input: $input, origin: $origin, task_args: $task_args) {
@@ -331,6 +332,7 @@ def bypass_linkvertise(url):
     session = requests.Session()
     session.headers.update({"User-Agent": IPHONE_UA, "Origin": "https://linkvertise.com", "Referer": url})
     variables = {"input": {"userIdAndUrl": {"user_id": uid, "url": pid}}, "origin": "sharing"}
+    wait_budget = LINKVERTISE_MAX_WAIT_SECONDS
     try:
         for round_number in range(1, LINKVERTISE_MAX_ROUNDS + 1):
             LINKVERTISE_LOG.info("Linkvertise getContent round=%s", round_number)
@@ -349,10 +351,28 @@ def bypass_linkvertise(url):
                 return None
 
             tasks = content.get("tasks", [])
+            # A numeric wait time is safe to honor as a passive, bounded wait.
+            # Do not automate premium tasks, ad interactions, CAPTCHAs, or browser challenges.
             waiting = [task for task in tasks if task.get("__typename") == "WaitTask" and task.get("status") == "IN_PROGRESS"]
             if waiting:
                 remaining = [task.get("remainingWaitingTime") for task in waiting]
-                LINKVERTISE_LOG.warning("Linkvertise wait task is still active; remaining_seconds=%s", remaining)
+                numeric_remaining = [value for value in remaining if isinstance(value, (int, float)) and value >= 0]
+                premium_open = any(task.get("__typename") == "PremiumTask" and task.get("status") == "OPEN" for task in tasks)
+                if numeric_remaining and not premium_open:
+                    wait_seconds = min(int(max(numeric_remaining)), wait_budget)
+                    LINKVERTISE_LOG.info("Linkvertise passive wait: seconds=%s", wait_seconds)
+                    if wait_seconds:
+                        time.sleep(wait_seconds)
+                        wait_budget -= wait_seconds
+                    if wait_budget <= 0:
+                        LINKVERTISE_LOG.warning("Linkvertise passive wait budget exhausted")
+                        return None
+                    continue
+                LINKVERTISE_LOG.warning(
+                    "Linkvertise verification still active; remaining_seconds=%s premium_task=%s",
+                    remaining,
+                    premium_open,
+                )
                 return None
             actionable = [task for task in tasks if task.get("status") in {"OPEN", "IN_PROGRESS"} and task.get("__typename") in {"AdTask", "WaitTask"}]
             if not actionable:
