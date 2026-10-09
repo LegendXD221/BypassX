@@ -166,6 +166,14 @@ async def bypass_endpoint(payload: BypassRequest, request: Request) -> BypassRes
         url = _validate_url(payload.url)
         handler, method = get_handler(url)
         if handler is None:
+            if method == "fallback_only":
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "success": False,
+                        "error": "This service requires browser verification and cannot be resolved automatically",
+                    },
+                )
             return JSONResponse(status_code=422, content={"success": False, "error": "Unsupported service"})
         destination = await asyncio.wait_for(
             run_in_threadpool(_resolve, handler, url), timeout=REQUEST_TIMEOUT

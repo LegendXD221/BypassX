@@ -650,9 +650,12 @@ FALLBACK_ONLY = {
 def get_handler(url):
     domain = urllib.parse.urlparse(url).netloc.lower()
 
+    def matches(hostname):
+        return domain == hostname or domain.endswith("." + hostname)
+
     # Check specific handlers
     for key, handler in SPECIFIC_HANDLERS.items():
-        if key in domain:
+        if matches(key):
             return handler, "specific"
 
     # Check type form services
@@ -662,7 +665,7 @@ def get_handler(url):
 
     # Check fallback
     for svc in FALLBACK_ONLY:
-        if svc in domain:
+        if matches(svc):
             return None, "fallback_only"
 
     # Check if it's a known shortener from PeterDaveHello list
