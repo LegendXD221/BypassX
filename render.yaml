@@ -19,3 +19,5 @@ services:
         value: "4096"
       - key: MAX_REDIRECTS
         value: "10"
+      - key: LINKVERTISE_MAX_WAIT_SECONDS
+        value: "45"

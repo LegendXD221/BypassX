@@ -262,7 +262,10 @@ LINKVERTISE_LOG.setLevel(logging.INFO)
 LINKVERTISE_MAX_ROUNDS = 10
 LINKVERTISE_HTTP_TIMEOUT = 20
 LINKVERTISE_RETRIES = 2
-LINKVERTISE_MAX_WAIT_SECONDS = 30
+try:
+    LINKVERTISE_MAX_WAIT_SECONDS = max(0, min(45, int(os.getenv("LINKVERTISE_MAX_WAIT_SECONDS", "45"))))
+except ValueError:
+    LINKVERTISE_MAX_WAIT_SECONDS = 45
 
 LV_GET_CONTENT_Q = """query GetContent($input: PublicLinkIdentificationInput!, $origin: String, $task_args: TaskArgument) {
   getContent(input: $input, origin: $origin, task_args: $task_args) {
